@@ -140,6 +140,50 @@ test("injects native system history at assistant boundaries", () => {
   );
 });
 
+test("keeps four cache breakpoints when system history trails the current user", () => {
+  const cache = { type: "ephemeral", ttl: "1h" };
+  // Claude Code's own request: two system-prompt markers, the last tool, and
+  // the current user message.
+  const body = {
+    system: [
+      { type: "text", text: "billing" },
+      { type: "text", text: "identity", cache_control: cache },
+      { type: "text", text: "prompt", cache_control: cache },
+    ],
+    tools: [{ name: "mcp__pi__read" }, { name: "mcp__pi__bash", cache_control: cache }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: "first" }] },
+      { role: "system", content: [{ type: "text", text: "environment" }] },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+      { role: "user", content: [{ type: "text", text: "second", cache_control: cache }] },
+    ],
+  };
+  const countCacheControl = (value: unknown): number => {
+    if (Array.isArray(value)) return value.reduce((total: number, child) => total + countCacheControl(child), 0);
+    if (!value || typeof value !== "object") return 0;
+    return Object.entries(value).reduce(
+      (total, [key, child]) => total + (key === "cache_control" ? 1 : countCacheControl(child)),
+      0,
+    );
+  };
+
+  const rewritten = JSON.parse(
+    rewriteInitialRequest(
+      Buffer.from(JSON.stringify(body)),
+      undefined,
+      body.messages[0]!.content,
+      [{ role: "system", content: [{ type: "text", text: "environment", cache_control: cache }] }],
+      // A system-prompt section changed after the last assistant reply.
+      [{ beforeAssistant: null, content: [{ type: "text", text: "section update" }] }],
+    ).toString("utf8"),
+  ) as typeof body;
+
+  assert.deepEqual(rewritten.messages.map((message) => message.role), ["user", "system", "assistant", "user", "system"]);
+  assert.equal(countCacheControl(rewritten), 4);
+  assert.equal((rewritten.messages[3]?.content as Array<Record<string, unknown>>).at(-1)?.cache_control, undefined);
+  assert.deepEqual((rewritten.messages.at(-1)?.content as Array<Record<string, unknown>>).at(-1)?.cache_control, cache);
+});
+
 test("runs a request through a stream-json Claude executable", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-claude-code-test-"));
   const workingRoot = await realpath(root);

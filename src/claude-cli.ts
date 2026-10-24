@@ -555,6 +555,12 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
     setCacheBreakpoint(messages[userIndexes.at(-2)!]!);
   }
   const final = messages.at(-1);
+  if (final?.role === "system") {
+    // Trailing system history follows Claude Code's current-user marker.
+    // Move that marker to the true tail instead of adding a fifth breakpoint.
+    const currentUser = messages.findLast((message) => message.role === "user");
+    if (currentUser) currentUser.content = withoutCacheControl(currentUser.content);
+  }
   if (final) setCacheBreakpoint(final);
 }
 
