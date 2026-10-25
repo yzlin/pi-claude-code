@@ -374,6 +374,10 @@ export function buildExtraBody(
     body.output_config = {
       effort: options.reasoning === "minimal" ? "low" : options.reasoning,
     };
+  } else if (supportsAdaptiveThinking(modelId)) {
+    // Adaptive-thinking models reject thinking.type "disabled"; use the lowest effort instead.
+    body.thinking = { type: "adaptive" };
+    body.output_config = { effort: "low" };
   } else {
     body.thinking = { type: "disabled" };
     // Native clear-thinking edits are invalid when thinking is disabled.

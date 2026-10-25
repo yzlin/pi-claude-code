@@ -218,4 +218,11 @@ test("normalizes tool schemas and builds native generation fields", () => {
     thinking: { type: "disabled" },
     context_management: { edits: [] },
   });
+  // Adaptive-thinking models reject thinking.type "disabled"; unset reasoning maps to the lowest effort.
+  assert.deepEqual(buildExtraBody("claude-opus-5-5", [], { maxTokens: 32 }), {
+    tools: [],
+    max_tokens: 32,
+    thinking: { type: "adaptive" },
+    output_config: { effort: "low" },
+  });
 });
