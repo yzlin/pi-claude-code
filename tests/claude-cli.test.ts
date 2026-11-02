@@ -85,6 +85,29 @@ test("stabilizes Claude Code's native replay reminders and cache breakpoint", ()
   );
 });
 
+test("rewrites replay requests whose initial user content is a string", () => {
+  const canonical = [{ type: "text", text: "inspect" }];
+  const prefix = [{ type: "text", text: "account reminder" }];
+  const initialSystemMessages = [{ role: "system", content: [{ type: "text", text: "date reminder" }] }];
+  const current = {
+    messages: [
+      { role: "user", content: "inspect" },
+      { role: "system", content: [] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "read", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "result" }] },
+      { role: "system", content: [{ type: "text", text: "date reminder" }] },
+    ],
+  };
+
+  const body = Buffer.from(JSON.stringify(current));
+  const rewrittenFirstContent = (userPrefix: unknown[] | undefined) => {
+    const rewritten = rewriteInitialRequest(body, userPrefix, canonical, initialSystemMessages);
+    return (JSON.parse(rewritten.toString("utf8")) as typeof current).messages[0]?.content;
+  };
+  assert.deepEqual(rewrittenFirstContent(prefix), [...prefix, ...canonical]);
+  assert.deepEqual(rewrittenFirstContent(undefined), canonical);
+});
+
 test("injects native system history at assistant boundaries", () => {
   const body = {
     system: [
