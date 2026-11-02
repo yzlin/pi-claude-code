@@ -226,6 +226,23 @@ test("refuses requests that do not line up with Pi's history", () => {
   );
 });
 
+test("rewrites replay requests whose initial user content is a string", () => {
+  const initialSystemMessages = [{ role: "system", content: [{ type: "text", text: "date reminder" }] }];
+  const current = {
+    messages: [
+      { role: "user", content: "inspect" },
+      { role: "system", content: [] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "read", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "result" }] },
+      { role: "system", content: [{ type: "text", text: "date reminder" }] },
+    ],
+  };
+
+  const frames = framesFor([{ role: "user", content: [text("inspect")] }, ...current.messages.slice(2)]);
+  const rewritten = rewrite(current.messages, frames, initialSystemMessages);
+  assert.deepEqual(withoutMarkers(rewritten[0]?.content), [text("inspect")]);
+});
+
 test("injects native system history at assistant boundaries", () => {
   const body = {
     system: [

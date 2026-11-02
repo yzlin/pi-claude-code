@@ -865,6 +865,10 @@ export function rewriteInitialRequest(
   };
   let messages = payload.messages;
   const first = messages?.[0];
+  // Claude Code may serialize a lone text block as a string during replay.
+  if (first?.role === "user" && typeof first.content === "string") {
+    first.content = [{ type: "text", text: first.content }];
+  }
   if (first?.role !== "user" || !Array.isArray(first.content)) {
     throw new Error("Claude Code request is missing its initial user message");
   }
