@@ -387,6 +387,8 @@ export function streamClaudeCode(
         nativeSystemInjections: nativeTranscript?.systemInjections,
         betas: nativeTranscript ? [NATIVE_TOOL_CHANGES_BETA] : undefined,
         sessionId: options?.cacheRetention === "none" ? undefined : options?.sessionId,
+        stripCache: options?.cacheRetention === "none",
+        payloadHook: options?.onPayload ? { onPayload: options.onPayload, model } : undefined,
         onEvent: (event) => translator.event(event),
       });
       translator.finish(

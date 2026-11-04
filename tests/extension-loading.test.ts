@@ -21,5 +21,7 @@ test("loads an installed extension without local peer dependencies", async (t) =
   const registrations = result.runtime.pendingNativeProviderRegistrations;
   assert.equal(registrations.length, 1);
   assert.equal(registrations[0].provider.id, "claude-code");
-  assert.ok(registrations[0].provider.getModels().length > 0);
+  const models = registrations[0].provider.getModels();
+  assert.ok(models.length > 0);
+  for (const model of models) assert.equal(model.compat?.supportsPayloadHook, true, model.id);
 });

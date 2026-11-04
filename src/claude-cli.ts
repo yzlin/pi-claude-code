@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
 import { registerSessionResourceCleanup } from "@earendil-works/pi-ai";
-import { TurnRelay } from "./turn-relay.ts";
+import { TurnRelay, withoutCacheControl, type PayloadHook } from "./turn-relay.ts";
 import { usageCreditsAllowed, usageCreditsChargeError, type RateLimitInfo } from "./billing.ts";
 import { envFlagEnabled } from "./env.ts";
 import type { DiscoveredClaudeModel } from "./model-catalog.ts";
@@ -61,6 +61,10 @@ export interface RunClaudeInput {
   onEvent?: (event: AnthropicStreamEvent) => void;
   /** Pi session whose linear continuation may reuse a warm Claude process. */
   sessionId?: string;
+  /** Pi `onPayload` + Pi model, bound to this turn only (never part of the worker fingerprint). */
+  payloadHook?: PayloadHook;
+  /** Strip all `cache_control` markers from this turn's request (Pi `cacheRetention: "none"`). */
+  stripCache?: boolean;
 }
 
 export interface RunClaudeOutput {
@@ -461,16 +465,6 @@ function nativeErrorText(event: Extract<NativeOutputEvent, { type: "assistant" }
     .filter((block): block is Extract<(typeof event.message.content)[number], { type: "text" }> => block.type === "text")
     .map((block) => block.text)
     .join("\n");
-}
-
-function withoutCacheControl(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutCacheControl);
-  if (!value || typeof value !== "object") return value;
-  const output: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key !== "cache_control") output[key] = withoutCacheControl(child);
-  }
-  return output;
 }
 
 interface NativeRequestMessage {
@@ -921,6 +915,7 @@ class ClaudeProcess {
             )
         : undefined,
       input.betas,
+      { payloadHook: input.payloadHook, stripCache: input.stripCache },
     );
 
     const abort = () => {
@@ -975,6 +970,7 @@ class ClaudeProcess {
         if (this.relay.status !== 200 || !this.relay.capture.complete || !this.relay.capture.message) {
           let detail = `status ${this.relay.status ?? "unknown"}, capture ${this.relay.capture.complete ? "complete" : "incomplete"}`;
           if (this.relay.failure) detail += `, relay failure ${this.relay.failure}`;
+          if (this.relay.rejection) detail += `, request rejected: ${this.relay.rejection.slice(0, 500)}`;
           if (this.relay.denied) detail += `, native retries denied ${this.relay.denied}`;
           const upstreamError = this.relay.errorText();
           if (upstreamError) detail += `, upstream said: ${upstreamError.slice(0, 500)}`;
@@ -1169,7 +1165,21 @@ registerSessionResourceCleanup((sessionId) => {
   void closeClaudeProcesses(sessionId);
 });
 
-export async function runClaudeRequest(input: RunClaudeInput): Promise<RunClaudeOutput> {
+let testUpstreamUrl: string | undefined;
+
+/**
+ * Test-only: point requests that omit `upstreamUrl` at a loopback HTTP fixture.
+ * Unset by default and unreachable from configuration or the environment.
+ */
+export function setUpstreamUrlForTests(url: string | undefined): void {
+  if (url !== undefined && !/^http:\/\/127\.0\.0\.1:\d+$/u.test(url)) {
+    throw new Error("Test upstream must be a loopback HTTP fixture");
+  }
+  testUpstreamUrl = url;
+}
+
+export async function runClaudeRequest(requested: RunClaudeInput): Promise<RunClaudeOutput> {
+  const input = testUpstreamUrl && !requested.upstreamUrl ? { ...requested, upstreamUrl: testUpstreamUrl } : requested;
   input.signal?.throwIfAborted();
   const plan = launchPlan(input);
   const acquired = await acquireProcess(input, plan);

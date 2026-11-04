@@ -140,7 +140,19 @@ export function modelFromDiscovery(info: DiscoveredClaudeModel): ClaudeCodeModel
   NATIVE_ROUTE_BY_ID.set(id, info.value);
   NATIVE_TOOL_CHANGES_BY_ID.set(id, builtin?.compat?.supportsMidConvoToolChanges === true);
   ADAPTIVE_THINKING_BY_ID.set(id, info.supportsAdaptiveThinking === true);
-  return builtin ? fromBuiltin(info, id, builtin) : fallbackModel(info, id);
+  return withPayloadHookSupport(builtin ? fromBuiltin(info, id, builtin) : fallbackModel(info, id));
+}
+
+/** Repo convention (not Pi core): this provider honors `onPayload` via its turn relay. */
+interface PayloadHookCompat {
+  supportsPayloadHook: true;
+}
+
+function withPayloadHookSupport(model: ClaudeCodeModel): ClaudeCodeModel {
+  // Pi types `compat` as `never` for custom APIs. Cast only this one field so
+  // consumers (e.g. pi-shout) can detect hook support at runtime.
+  const compat: PayloadHookCompat = { supportsPayloadHook: true };
+  return { ...model, compat: compat as never };
 }
 
 export const CLAUDE_CODE_MODELS: ClaudeCodeModel[] = FALLBACK_DISCOVERY.map(modelFromDiscovery);

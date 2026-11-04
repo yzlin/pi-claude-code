@@ -2,10 +2,50 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AnthropicStreamEvent, NativeContentBlock, NativeMessage } from "./native-types.ts";
 
 function copy<T>(value: T): T {
   return structuredClone(value);
+}
+
+export function withoutCacheControl(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutCacheControl);
+  if (!value || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key !== "cache_control") output[key] = withoutCacheControl(child);
+  }
+  return output;
+}
+
+export type RequestTransform = (body: Buffer) => Buffer | Promise<Buffer>;
+
+/** Pi's `onPayload` bound to the Pi model of one turn (not Claude Code's native route). */
+export interface PayloadHook {
+  onPayload: (payload: unknown, model: Model<Api>) => unknown | undefined | Promise<unknown | undefined>;
+  model: Model<Api>;
+}
+
+export interface TurnRequestOptions {
+  payloadHook?: PayloadHook;
+  /** Remove every `cache_control` marker (Pi `cacheRetention: "none"`). */
+  stripCache?: boolean;
+}
+
+async function finalizeRequest(body: Buffer, options: TurnRequestOptions): Promise<Buffer> {
+  if (!options.stripCache && !options.payloadHook) return body;
+  let payload = JSON.parse(body.toString("utf8")) as Record<string, unknown>;
+  if (options.stripCache) {
+    for (const key of ["system", "messages", "tools"]) {
+      if (key in payload) payload[key] = withoutCacheControl(payload[key]);
+    }
+  }
+  if (options.payloadHook) {
+    const replacement = await options.payloadHook.onPayload(payload, options.payloadHook.model);
+    if (replacement !== undefined) payload = replacement as Record<string, unknown>;
+  }
+  return Buffer.from(JSON.stringify(payload));
 }
 
 export class AnthropicCapture {
@@ -119,6 +159,8 @@ export class TurnRelay {
   requestId?: string;
   failure?: string;
   errorBody = Buffer.alloc(0);
+  /** Message of the error that rejected the request before forwarding (payload hook or finalization). */
+  rejection?: string;
   originalRequestBody?: Buffer;
   requestBody?: Buffer;
 
@@ -130,14 +172,16 @@ export class TurnRelay {
   private cancelled = false;
   private closed = false;
   private baseUrl?: string;
-  private transformRequest?: (body: Buffer) => Buffer;
+  private transformRequest?: RequestTransform;
+  private turnOptions: TurnRequestOptions = {};
+  private turnToken = 0;
   private requestBetas: string[] = [];
 
   constructor(
     upstream = "https://api.anthropic.com",
     private readonly timeoutMs = 180_000,
     onEvent?: (event: AnthropicStreamEvent) => void,
-    transformRequest?: (body: Buffer) => Buffer,
+    transformRequest?: RequestTransform,
     requestBetas: string[] = [],
   ) {
     this.upstream = new URL(upstream);
@@ -163,8 +207,9 @@ export class TurnRelay {
   /** Arm the persistent relay for one new Claude turn. */
   beginTurn(
     onEvent?: (event: AnthropicStreamEvent) => void,
-    transformRequest?: (body: Buffer) => Buffer,
+    transformRequest?: RequestTransform,
     requestBetas: string[] = [],
+    turnOptions: TurnRequestOptions = {},
   ): void {
     if (this.closed) throw new Error("Claude Code turn relay is closed");
     if (this.active.size > 0) throw new Error("Claude Code turn relay still has an active request");
@@ -175,9 +220,12 @@ export class TurnRelay {
     this.requestId = undefined;
     this.failure = undefined;
     this.errorBody = Buffer.alloc(0);
+    this.rejection = undefined;
     this.originalRequestBody = undefined;
     this.requestBody = undefined;
     this.transformRequest = transformRequest;
+    this.turnOptions = turnOptions;
+    this.turnToken += 1;
     this.requestBetas = requestBetas;
     this.cancelled = false;
   }
@@ -255,14 +303,25 @@ export class TurnRelay {
     this.used = true;
     this.sockets.add(request);
     this.sockets.add(response);
+    // Bind this request to the turn that accepted it; awaits below must not
+    // pick up a later turn's transform, hook, or cancellation state.
+    const token = this.turnToken;
+    const transform = this.transformRequest;
+    const turnOptions = this.turnOptions;
 
     let upstreamRequest: http.ClientRequest | undefined;
     try {
       let body = await this.readBody(request);
       this.originalRequestBody = Buffer.from(body);
-      if (this.transformRequest) body = this.transformRequest(body);
+      if (transform) body = await transform(body);
+      try {
+        body = await finalizeRequest(body, turnOptions);
+      } catch (error) {
+        if (token === this.turnToken) this.rejection = error instanceof Error ? error.message : String(error);
+        throw error;
+      }
+      if (this.cancelled || token !== this.turnToken) return;
       this.requestBody = Buffer.from(body);
-      if (this.cancelled) return;
 
       const headers: http.OutgoingHttpHeaders = {};
       for (const [name, value] of Object.entries(request.headers)) {

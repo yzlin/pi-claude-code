@@ -75,7 +75,37 @@ tool execution. In particular, it:
   original assistant boundaries and adds the corresponding Anthropic beta
   header; and
 - ties cancellation to the active upstream socket as well as the Claude Code
-  process.
+  process; and
+- applies Pi's per-request `onPayload` hook to the exact body sent upstream.
+
+### Payload hook and cache stripping
+
+Pi's `onPayload` and the Pi `Model` are bound to each turn when the turn
+begins, never when the worker is created, so a warm continuation calls the
+current turn's hook. Neither is part of the worker fingerprint.
+
+For the turn's single forwarded request the relay:
+
+1. reads Claude Code's request body;
+2. applies the replay rewrite described above, if any;
+3. when Pi requested `cacheRetention: "none"`, removes every `cache_control`
+   key recursively from `system`, `messages`, and `tools` (the turn also skips
+   warm-process reuse);
+4. awaits `onPayload(parsedBody, piModel)`. A non-`undefined` return value
+   replaces the body and is serialized as-is; `undefined` keeps the body; and
+5. forwards the result. `requestBody` is exactly the forwarded bytes.
+
+If the turn is aborted while the hook is pending, nothing is forwarded. If the
+hook (or stripping) throws, nothing is forwarded either: Claude Code receives a
+502, the turn fails with an error that includes the thrown message
+(`request rejected: <message>`), and Pi's stream ends with
+`stopReason: "error"`. Any retried Claude Code request in that turn is denied
+without calling the hook again.
+
+Every model this provider registers sets `compat.supportsPayloadHook: true`.
+This is a convention of this package, not a Pi core field, so consumers that
+must inspect or cap the outgoing payload (for example, its top-level
+`max_tokens`) can tell that `onPayload` is honored before sending anything.
 
 ## Tool schemas
 

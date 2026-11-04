@@ -60,3 +60,23 @@ test("maps discovered aliases to stable canonical Pi model ids", () => {
   assert.equal(future.id, "claude-future-1");
   assert.equal(future.cost.input, 0);
 });
+
+test("every Claude Code model advertises payload-hook support", () => {
+  const builtin = modelFromDiscovery({
+    value: "sonnet",
+    resolvedModel: "claude-sonnet-5",
+    displayName: "Sonnet",
+    description: "Efficient",
+  });
+  const fallback = modelFromDiscovery({
+    value: "future",
+    resolvedModel: "claude-future-1",
+    displayName: "Future",
+    description: "A newly available model",
+  });
+  assert.ok(builtin.cost.input > 0, "expected the builtin path");
+  assert.equal(fallback.cost.input, 0, "expected the fallback path");
+  for (const model of [builtin, fallback, ...CLAUDE_CODE_MODELS]) {
+    assert.equal((model.compat as { supportsPayloadHook?: unknown } | undefined)?.supportsPayloadHook, true, model.id);
+  }
+});
