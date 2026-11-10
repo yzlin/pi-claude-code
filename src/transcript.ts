@@ -145,8 +145,10 @@ function userContent(content: string | (TextContent | ImageContent)[]): unknown[
 }
 
 function toolResultContent(message: ToolResultMessage): string | unknown[] {
+  // Claude Code reduces error results to their text before sending them, so
+  // replaying images there would leave Pi's history unmatched on the wire.
   const hasImages = message.content.some((block) => block.type === "image");
-  if (!hasImages) {
+  if (!hasImages || message.isError) {
     return sanitizeSurrogates(
       message.content
         .filter((block): block is TextContent => block.type === "text")

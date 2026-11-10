@@ -69,6 +69,27 @@ test("prepares replay frames and groups tool results", () => {
   assert.equal(frames[2]?.shouldQuery, undefined);
 });
 
+test("sends error tool results as text only, as Claude Code does", () => {
+  const image = { type: "image" as const, mimeType: "image/png", data: "AAAA" };
+  const frames = prepareFrames([
+    { role: "user", content: "go", timestamp: 0 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "codemode",
+      content: [{ type: "text", text: "before" }, image, { type: "text", text: "after" }],
+      isError: true,
+      timestamp: 1,
+    },
+  ]);
+  assert.deepEqual(frames.at(-1)?.message.content.at(-1), {
+    type: "tool_result",
+    tool_use_id: "t1",
+    content: "before\nafter",
+    is_error: true,
+  });
+});
+
 test("replays native signed blocks only while the visible projection is unchanged", () => {
   const assistant: AssistantMessage = {
     role: "assistant",
