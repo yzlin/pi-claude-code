@@ -178,6 +178,20 @@ test("strips reminder blocks from text-array tool results and keeps Claude Code'
   ]);
 });
 
+test("keeps an image scale note that is already in Pi's history", () => {
+  const image = { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "resized" } };
+  const note = text("[Image: original 390x2025, displayed at 385x2000. Multiply coordinates by 1.01 to map to original image.]");
+  const wire = [
+    { role: "user", content: [text("go")] },
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "codemode", input: {} }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [text("out"), image, note] }] },
+  ];
+  const rewritten = rewrite(wire, framesFor(wire));
+  assert.deepEqual(rewritten[2]?.content, [
+    { type: "tool_result", tool_use_id: "t1", content: [text("out"), image, note] },
+  ]);
+});
+
 test("keeps user-authored reminder-like text and ordinary output unchanged", () => {
   const canonical = [
     { role: "user", content: [text("<system-reminder>mine</system-reminder>"), text("inspect")] },
